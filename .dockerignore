@@ -66,6 +66,4 @@ site/
 
 # Project specific
 postgres/
-tests/
-migrations/
-alembic.ini 
+tests/ 

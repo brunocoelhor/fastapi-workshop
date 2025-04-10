@@ -8,4 +8,8 @@ app = FastAPI(
     description="Pamps is a posting app to clone twitter",
 )
 
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
 app.include_router(main_router)

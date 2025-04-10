@@ -1,0 +1,87 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USER }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          # Create backup directory if it doesn't exist
+          mkdir -p ~/pamps/backups
+          
+          # Navigate to project directory
+          cd ~/pamps
+          
+          # Verify we're using the correct docker-compose file
+          if [ ! -f "docker-compose.yaml" ]; then
+            echo "Error: docker-compose.yaml not found!"
+            exit 1
+          fi
+          
+          if [ -f "docker-compose.dev.yaml" ]; then
+            echo "Warning: Found development docker-compose file. Make sure we're using the production one."
+          fi
+          
+          # Backup current database (if exists)
+          if docker-compose ps | grep -q "db.*Up"; then
+            echo "Creating database backup..."
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            docker-compose exec -T db pg_dump -U ${{ secrets.POSTGRES_USER }} ${{ secrets.POSTGRES_DB }} > ~/pamps/backups/backup_$TIMESTAMP.sql
+            
+            # Verify backup was created successfully
+            if [ ! -f "~/pamps/backups/backup_$TIMESTAMP.sql" ]; then
+              echo "Error: Database backup failed!"
+              exit 1
+            fi
+          fi
+          
+          # Pull latest changes
+          git fetch origin main
+          git reset --hard origin/main
+          
+          # Build and deploy
+          echo "Building and deploying new version..."
+          docker-compose pull
+          docker-compose build --no-cache
+          docker-compose down
+          docker-compose up -d
+          
+          # Wait for services to be healthy
+          echo "Waiting for services to be healthy..."
+          sleep 30
+          
+          # Check if services are running
+          if ! docker-compose ps | grep -q "api.*Up"; then
+            echo "API service failed to start"
+            exit 1
+          fi
+          
+          if ! docker-compose ps | grep -q "db.*Up"; then
+            echo "Database service failed to start"
+            exit 1
+          fi
+          
+          # Verify API health endpoint
+          if ! curl -f http://localhost:8000/health; then
+            echo "API health check failed"
+            exit 1
+          fi
+          
+          # Cleanup old backups (keep last 5)
+          cd ~/pamps/backups
+          ls -t | tail -n +6 | xargs -r rm
+          
+          echo "Deployment completed successfully!"
